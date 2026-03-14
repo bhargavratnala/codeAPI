@@ -1,0 +1,57 @@
+services:
+  codeapi:
+    build: .
+    container_name: codeapi
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./dockerfiles:/app/dockerfiles
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - postgres
+
+  worker:
+    build: .
+    container_name: worker
+    command: celery -A worker worker --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dockerfiles:/app/dockerfiles
+    depends_on:
+      - redis
+      - postgres
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+  postgres:
+    image: postgres:17
+    container_name: postgres
+    env_file:
+      - .env
+    environment:
+      POSTGRES_USER: ${DATABASE_USER}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
+      POSTGRES_DB: ${DATABASE_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+  
+  adminer:
+    image: adminer:latest
+    container_name: adminer
+    ports:
+      - "8080:8080"
+    depends_on:
+      - postgres
+
+volumes:
+  postgres_data:
