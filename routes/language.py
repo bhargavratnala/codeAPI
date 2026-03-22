@@ -1,5 +1,5 @@
 from typing import Annotated
-from fastapi import APIRouter, Depends, File, UploadFile, Form
+from fastapi import APIRouter, Depends, File, UploadFile, Form, HTTPException
 from sqlalchemy.orm import Session
 from models import LanguageModel, get_db
 from schema import LanguageList, Language, LanguageDisplay
@@ -57,3 +57,25 @@ async def get_language(id: int, db: Session = Depends(get_db)):
     if not language:
         return {"error": "Language not found"}
     return Language.model_validate(language)
+
+@router.delete("/{id:int}")
+async def delete_language(id: int, db: Session = Depends(get_db)):
+    language = db.query(LanguageModel).filter(LanguageModel.id == id).first()
+    if not language:
+        raise HTTPException(status_code=404, detail="Language not found")
+
+    dockerfile_path = DOCKERFILES_DIR / language.dockerfile
+    image_name = language.image_name or f"codeapi_{language.name.lower()}"
+    image_archive_paths = (
+        DOCKERFILES_DIR / f"{image_name}.tar",
+        DOCKERFILES_DIR / image_name,
+    )
+
+    db.delete(language)
+    db.commit()
+
+    for file_path in (dockerfile_path, *image_archive_paths):
+        if file_path.exists():
+            file_path.unlink()
+
+    return {"message": "Language deleted successfully", "id": id}

@@ -4,6 +4,7 @@ import os, docker
 import tarfile
 from time import monotonic
 import requests
+from docker.errors import ImageNotFound
 from models import ExecutionResultModel, LanguageModel, get_db
 from utils import DOCKERFILES_DIR, get_logger, ExecutionStatus, redis_client
 
@@ -30,6 +31,23 @@ STOP_REQUEST_KEY_PREFIX = "execution:stop:"
 
 def get_stop_request_key(task_id: str) -> str:
     return f"{STOP_REQUEST_KEY_PREFIX}{task_id}"
+
+def _ensure_image_available(client, image_name: str) -> None:
+    try:
+        client.images.get(image_name)
+        return
+    except ImageNotFound:
+        pass
+
+    archive_path = DOCKERFILES_DIR / f"{image_name}.tar"
+    if not archive_path.exists():
+        raise FileNotFoundError(f"Image archive not found for {image_name}")
+
+    with open(archive_path, "rb") as archive_file:
+        client.images.load(archive_file.read())
+
+    client.images.get(image_name)
+
 
 def _build_files_archive(files: dict[str, str]) -> bytes:
     archive_buffer = io.BytesIO()
@@ -81,6 +99,7 @@ def execute_code(self, language_id, code, input_data, time_limit=5, memory_limit
             return {"status": ExecutionStatus.ERROR.value, "output": "Language not found"}
 
         image_name = language.image_name or f"codeapi_{language.name.lower()}"
+        _ensure_image_available(client, image_name)
 
         logger.info(f"Starting execution for task {task_id} with language {language.name}")
         logger.debug(f"Code:\n{code}\nInput:\n{input_data}")
@@ -186,20 +205,26 @@ def build_language_image(language_id):
             return
         image_name = f"codeapi_{language.name.lower()}"
         dockerfile_path = DOCKERFILES_DIR / f"Dockerfile.{language.name.lower()}"
+        image_archive_path = DOCKERFILES_DIR / f"{image_name}.tar"
 
         logger.info(f"Building image for language {language.name} using Dockerfile at {dockerfile_path}")
         image, build_logs = client.images.build(path=str(DOCKERFILES_DIR), dockerfile=dockerfile_path.name, tag=image_name)
         logger.info(f"Successfully built image {image_name} for language {language.name}")
-        language.image_name = image_name
         logs = []
+
         for chunk in build_logs:
             if "stream" in chunk:
                 logs.append(chunk["stream"])
+        
+        with open(image_archive_path, 'wb') as f:
+            for chunk in image.save(chunk_size=2097152, named=True):
+                f.write(chunk)
 
+        language.image_name = image_name
         language.build_logs = "".join(logs)
         db.commit()
     except Exception as e:
         db.rollback()
-        logger.error(f"Error building image for {language_id}: {e}")
+        logger.error(f"Error building image for {language_id}: {e}", exc_info=True)
     finally:
         db.close()

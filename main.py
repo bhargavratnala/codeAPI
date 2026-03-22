@@ -24,11 +24,11 @@ app = FastAPI(
 
 app.logger = logger
 
-@app.get("/health")
+@app.get("/health", tags = ["health-check"])
 async def health_check():
     return {"status": "ok"}
 
-@app.get("")
+@app.get("", tags = ["Home"])
 async def root():
     return {"message": "Welcome to CodeAPI! Use /docs for API documentation."}
 
